@@ -35,13 +35,21 @@ this will place data and bss inside SRAM2.
 """
 
 
-import sys
 import argparse
-import os
 import glob
+import os
+import sys
 import warnings
+from typing import Dict
+from typing import NamedTuple
+from typing import Sequence
+
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
+
+
+class FileRelocation(NamedTuple):
+    pass
 
 
 PRINT_TEMPLATE = """
@@ -176,7 +184,7 @@ def find_sections(filename, full_list_of_sections):
 
         for section in sections:
 
-            if ".text." in section.name:
+            if section.name.startswith(".text."):
                 full_list_of_sections["text"].append(section.name)
 
             if ".rodata." in section.name:
@@ -256,8 +264,21 @@ def print_linker_sections(list_sections):
     return print_string
 
 
-def string_create_helper(region, memory_type,
-                         full_list_of_sections, load_address_in_flash, is_copy):
+def string_create_helper(
+        section: str, memory_type: str,
+        full_list_of_sections: Dict[str, Sequence[str]],
+        load_address_in_flash: bool, is_copy: bool) -> str:
+    """
+    Return a linker script fragment that places the listed sections in the
+    specified memory region.
+
+    :param section: logical kind of section being considered, such as data or bss
+    :param memory_type: name of memory region to place data into
+    :param full_list_of_sections:
+    :param load_address_in_flash:
+    :param is_copy:
+    :return:
+    """
     linker_string = ''
     if load_address_in_flash:
         if is_copy:
@@ -266,31 +287,31 @@ def string_create_helper(region, memory_type,
             load_address_string = LOAD_ADDRESS_LOCATION_FLASH_NOCOPY.format(memory_type)
     else:
         load_address_string = LOAD_ADDRESS_LOCATION_BSS.format(memory_type)
-    if full_list_of_sections[region]:
+    if full_list_of_sections[section]:
         # Create a complete list of funcs/ variables that goes in for this
         # memory type
-        tmp = print_linker_sections(full_list_of_sections[region])
-        if region_is_default_ram(memory_type) and region in {'data', 'bss'}:
+        tmp = print_linker_sections(full_list_of_sections[section])
+        if region_is_default_ram(memory_type) and section in {'data', 'bss'}:
             linker_string += tmp
         else:
-            if not region_is_default_ram(memory_type) and region == 'rodata':
+            if not region_is_default_ram(memory_type) and section == 'rodata':
                 align_size = 0
                 if memory_type in mpu_align:
                     align_size = mpu_align[memory_type]
 
-                linker_string += LINKER_SECTION_SEQ_MPU.format(memory_type.lower(), region, memory_type.upper(),
-                                                               region.upper(), tmp, load_address_string, align_size)
+                linker_string += LINKER_SECTION_SEQ_MPU.format(memory_type.lower(), section, memory_type.upper(),
+                                                               section.upper(), tmp, load_address_string, align_size)
             else:
-                if region_is_default_ram(memory_type) and region == 'text':
+                if region_is_default_ram(memory_type) and section == 'text':
                     align_size = 0
-                    linker_string += LINKER_SECTION_SEQ_MPU.format(memory_type.lower(), region, memory_type.upper(),
-                                                                   region.upper(), tmp, load_address_string, align_size)
+                    linker_string += LINKER_SECTION_SEQ_MPU.format(memory_type.lower(), section, memory_type.upper(),
+                                                                   section.upper(), tmp, load_address_string, align_size)
                 else:
-                    linker_string += LINKER_SECTION_SEQ.format(memory_type.lower(), region, memory_type.upper(),
-                                                               region.upper(), tmp, load_address_string)
+                    linker_string += LINKER_SECTION_SEQ.format(memory_type.lower(), section, memory_type.upper(),
+                                                               section.upper(), tmp, load_address_string)
             if load_address_in_flash:
-                linker_string += SECTION_LOAD_MEMORY_SEQ.format(memory_type.lower(), region, memory_type.upper(),
-                                                                region.upper())
+                linker_string += SECTION_LOAD_MEMORY_SEQ.format(memory_type.lower(), section, memory_type.upper(),
+                                                                section.upper())
     return linker_string
 
 
@@ -433,7 +454,7 @@ def create_dict_wrt_mem():
         if ':' not in line:
             continue
 
-        mem_region, copy_flag, file_name = line.split(':', 2)
+        mem_region, sections, copy_flag, file_name = line.split(':', 3)
 
         file_name_list = glob.glob(file_name)
         if not file_name_list:
@@ -441,10 +462,10 @@ def create_dict_wrt_mem():
             continue
         if mem_region == '':
             continue
+
+        mem_region = "{}_{}|{}".format(mem_region, "_".join(sections.split(",")), copy_flag)
         if args.verbose:
             print("Memory region ", mem_region, " Selected for file:", file_name_list)
-
-        mem_region = "|".join((mem_region, copy_flag))
 
         if mem_region in rel_dict:
             rel_dict[mem_region].extend(file_name_list)

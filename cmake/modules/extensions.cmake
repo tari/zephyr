@@ -1284,22 +1284,74 @@ endfunction(zephyr_linker_sources)
 
 
 # Helper function for CONFIG_CODE_DATA_RELOCATION
-# Call this function with 2 arguments file and then memory location.
-# One optional [NOCOPY] flag can be used.
-function(zephyr_code_relocate file location)
+#
+#     zephyr_code_relocate(
+#         FILES src/file1.c
+#         SECTIONS TEXT RODATA
+#         REGION RAM
+#     )
+#
+# This can also be used to specify a single file and memory region, as:
+#
+#     zephyr_code_relocate(file location [NOCOPY])
+#
+# But the
+function(zephyr_code_relocate)
   set(options NOCOPY)
-  cmake_parse_arguments(CODE_REL "${options}" "" "" ${ARGN})
-  if(NOT IS_ABSOLUTE ${file})
-    set(file ${CMAKE_CURRENT_SOURCE_DIR}/${file})
+  set(oneValueArgs REGION)
+  set(multiValueArgs SECTIONS FILES)
+  cmake_parse_arguments(CODE_REL "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  list(LENGTH CODE_REL_UNPARSED_ARGUMENTS extraArgs)
+  if (numExtraArgs GREATER 0)
+    if (DEFINED CODE_REL_FILES OR DEFINED CODE_REL_REGION)
+      # Use either the full options or bare positional arguments, not both.
+      message(FATAL_ERROR "Unrecognized extra arguments for zephyr_code_relocate: ${CODE_REL_UNPARSED_ARGUMENTS}")
+    endif()
+    if (NOT numExtraArgs EQUAL 2)
+      message(FATAL_ERROR "Wrong number of positional arguments to zephyr_code_relocate: expected 2 but got ${numExtraArgs}")
+    endif()
+
+    list(GET CODE_REL_UNPARSED_ARGUMENTS 0 CODE_REL_FILES)
+    # Second argument is a region and zero or more sections, separated by underscores.
+    list(GET CODE_REL_UNPARSED_ARGUMENTS 1 CODE_REL_SECTIONS)
+    # Convert _-separated values to list
+    string(REPLACE "_" ";" CODE_REL_SECTIONS ${CODE_REL_SECTIONS})
+    # Extract memory region name
+    list(POP_FRONT CODE_REL_SECTIONS CODE_REL_REGION)
+  else()
+    if (NOT DEFINED CODE_REL_REGION)
+      message(FATAL_ERROR "zephyr_code_relocate requires a target memory region")
+    endif()
   endif()
+
   if(NOT CODE_REL_NOCOPY)
     set(copy_flag COPY)
   else()
     set(copy_flag NOCOPY)
   endif()
-  set_property(TARGET code_data_relocation_target
-    APPEND PROPERTY COMPILE_DEFINITIONS
-    "${location}:${copy_flag}:${file}")
+
+  set(recognizedSections "TEXT;RODATA;DATA;BSS")
+  foreach(section ${CODE_REL_SECTIONS})
+    if (NOT section IN_LIST recognizedSections)
+      message(FATAL_ERROR "Section \"${section}\" is not recognized: must be one of ${recognizedSections}")
+    endif()
+  endforeach()
+
+  # Make list of sections comma-separated to be consumed by the script,
+  # because semicolons are used as record separators.
+  string(REPLACE ";" "," CODE_REL_SECTIONS "${CODE_REL_SECTIONS}")
+
+  foreach(file ${CODE_REL_FILES})
+    if(NOT IS_ABSOLUTE ${file})
+      set(file ${CMAKE_CURRENT_SOURCE_DIR}/${file})
+    endif()
+
+    message(DEBUG "zephyr_code_relocate ${CODE_REL_REGION}:${CODE_REL_SECTIONS}:${copy_flag}:${file}")
+    set_property(TARGET code_data_relocation_target
+            APPEND PROPERTY COMPILE_DEFINITIONS
+            "${CODE_REL_REGION}:${CODE_REL_SECTIONS}:${copy_flag}:${file}")
+  endforeach()
 endfunction()
 
 # Usage:
